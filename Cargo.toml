@@ -1,0 +1,20 @@
+[package]
+name = "mtls_ob_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
+mysql_async = { version = "0.37", default-features = false, features = ["default-rustls-ring"] }
+pem = "3"
+x509-parser = "0.18"
+axum = { version = "0.8", features = ["multipart"] }
+# HTTPS-приём из памяти; no-provider => используем ring от mysql_async (без aws-lc/cmake)
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+anyhow = "1"
+serde_json = "1"
+
+[profile.release]
+strip = "symbols"
+lto = true
+codegen-units = 1

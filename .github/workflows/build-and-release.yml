@@ -1,0 +1,70 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Build command'
+        required: true
+        default: 'build-release'
+        type: choice
+        options:
+          - build-release
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: mtls_ob_test
+  RELEASE_TAG: latest_release
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Linux
+        run: cargo build --release
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bin
+          path: target/release/mtls_ob_test
+
+  release:
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-bin
+          path: artifacts/linux
+
+      - name: Delete existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ env.RELEASE_TAG }}" >/dev/null 2>&1; then
+            gh release delete "${{ env.RELEASE_TAG }}" --yes --cleanup-tag
+          fi
+          git tag -d "${{ env.RELEASE_TAG }}" >/dev/null 2>&1 || true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ env.RELEASE_TAG }}" \
+            artifacts/linux/mtls_ob_test \
+            --title "Release ${{ env.RELEASE_TAG }}" \
+            --notes "Linux build from commit ${GITHUB_SHA}" \
+            --target "${GITHUB_SHA}"

@@ -1,0 +1,8 @@
+/target
+/Cargo.lock
+# боевые секреты OB не коммитим
+*.p12
+/certpas/
+# а встроенный mgmt-серт нужен для сборки — разрешаем явно
+!embedded/
+!embedded/*.pem
