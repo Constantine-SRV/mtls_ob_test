@@ -1,26 +1,29 @@
-//! mgmt-сервер (HTTPS на встроенном серте): заливка и инфо о серте.
+//! mgmt server (HTTPS+mTLS): cert upload and cert info. + IP allowlist.
 
 use std::sync::Arc;
 
 use axum::extract::{Multipart, State};
 use axum::http::header;
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use ipnet::IpNet;
 
+use crate::acl::{ip_guard, GuardState};
 use crate::certinfo;
 use crate::error::ApiError;
 use crate::state::Shared;
 
-pub fn mgmt_router(shared: Arc<Shared>) -> Router {
+pub fn mgmt_router(shared: Arc<Shared>, nets: Arc<Vec<IpNet>>) -> Router {
+    let guard = GuardState { nets, label: "mgmt" };
     Router::new()
         .route("/cert", post(upload_cert))
         .route("/cert/validity", get(validity))
         .with_state(shared)
+        .layer(middleware::from_fn_with_state(guard, ip_guard))
 }
 
-/// POST /cert  (multipart: поля cert и key — PEM-файлы)
-/// Заливает новый клиентский серт, проверяет его подключением к OB, ставит в память.
 async fn upload_cert(
     State(sh): State<Arc<Shared>>,
     mut mp: Multipart,
@@ -38,8 +41,8 @@ async fn upload_cert(
         }
     }
 
-    let cert = cert.ok_or_else(|| anyhow::anyhow!("нет поля 'cert' (curl -F cert=@file.pem)"))?;
-    let key = key.ok_or_else(|| anyhow::anyhow!("нет поля 'key' (curl -F key=@file.pem)"))?;
+    let cert = cert.ok_or_else(|| anyhow::anyhow!("missing field 'cert' (curl -F cert=@file.pem)"))?;
+    let key = key.ok_or_else(|| anyhow::anyhow!("missing field 'key' (curl -F key=@file.pem)"))?;
 
     let info = sh.install_cert(cert, key).await?;
     let body = serde_json::json!({
@@ -47,13 +50,12 @@ async fn upload_cert(
         "cn": info.cn,
         "not_before": info.not_before,
         "not_after": info.not_after,
-        "note": "серт принят и проверен подключением к OceanBase"
+        "note": "cert accepted and verified by connecting to OceanBase"
     })
     .to_string();
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }
 
-/// GET /cert/validity -> CN + срок действия текущего серта (или 503 nocert).
 async fn validity(State(sh): State<Arc<Shared>>) -> Result<Response, ApiError> {
     let cred = sh.client.read().await.clone();
     let Some(cred) = cred else {

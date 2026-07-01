@@ -1,4 +1,4 @@
-//! Единый тип ошибки API. NoCert -> 503, прочее -> 500, тело JSON.
+//! Single API error type. NoCert -> 503, everything else -> 500, JSON body.
 
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};

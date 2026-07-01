@@ -12,7 +12,6 @@ pub struct Db {
 }
 
 impl Db {
-    /// Пул к OceanBase. cert/key/ca — байты в памяти (rustls не требует файлов).
     pub fn connect(id: &Identity, host: &str, port: u16, user: &str) -> Self {
         let ssl = SslOpts::default()
             .with_root_certs(vec![id.ca_pem.clone().into()])
@@ -28,7 +27,6 @@ impl Db {
         Db { pool: Pool::new(opts) }
     }
 
-    /// SELECT version(), JSON собирает сам OB.
     pub async fn version_json(&self) -> Result<String> {
         let mut conn = self.pool.get_conn().await?;
         let row: Option<String> = conn

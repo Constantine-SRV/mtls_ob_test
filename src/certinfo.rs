@@ -1,4 +1,4 @@
-//! Разбор сертификата: CN + срок действия (для GET /cert/validity и валидации заливки).
+//! Certificate parsing: CN + validity window.
 
 use anyhow::{anyhow, Context, Result};
 
@@ -8,12 +8,11 @@ pub struct CertInfo {
     pub not_after: String,
 }
 
-/// Парсит PEM-серт (берёт первый блок = leaf), достаёт CN и срок.
 pub fn describe(cert_pem: &[u8]) -> Result<CertInfo> {
-    let block = pem::parse(cert_pem).context("не PEM-сертификат")?;
+    let block = pem::parse(cert_pem).context("not a PEM certificate")?;
     let der = block.contents();
-    let (_, cert) = x509_parser::parse_x509_certificate(der)
-        .map_err(|e| anyhow!("разбор X.509: {e:?}"))?;
+    let (_, cert) =
+        x509_parser::parse_x509_certificate(der).map_err(|e| anyhow!("X.509 parse: {e:?}"))?;
 
     let cn = cert
         .subject()

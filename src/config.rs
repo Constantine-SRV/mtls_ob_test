@@ -1,31 +1,62 @@
-//! Конфиг из env. Холодный старт: на диске только CA, клиентского серта нет.
+//! Agent config from a TOML file (path in env CONFIG, default ./agent.toml).
+//! IP allowlists are per-server (with a common [network].allow_ips default),
+//! CN allowlists are per-server.
 
-use std::path::PathBuf;
+use anyhow::{Context, Result};
+use serde::Deserialize;
 
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub ob_host: String,
-    pub ob_port: u16,
-    pub ob_user: String,
-    pub ca_path: PathBuf,
-    pub data_addr: String, // HTTP: /version /health
-    pub mgmt_addr: String, // HTTPS (встроенный серт): POST /cert, GET /cert/validity
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileConfig {
+    #[serde(default)]
+    pub network: NetworkCfg,
+    pub data: ServerCfg,
+    pub mgmt: ServerCfg,
+    pub oceanbase: ObCfg,
 }
 
-impl Config {
-    pub fn from_env() -> anyhow::Result<Self> {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        Ok(Self {
-            ob_host: env("OB_HOST", "192.168.55.202"),
-            ob_port: env("OB_PORT", "2881").parse()?,
-            ob_user: env("OB_USER", "nm_test"),
-            ca_path: PathBuf::from(env("OB_CA", &format!("{home}/certpas/ca.pem"))),
-            data_addr: env("DATA_ADDR", "0.0.0.0:8080"),
-            mgmt_addr: env("MGMT_ADDR", "0.0.0.0:9443"),
-        })
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NetworkCfg {
+    /// Common IP/CIDR allowlist used when a server has no allow_ips of its own.
+    #[serde(default)]
+    pub allow_ips: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerCfg {
+    pub listen: String,
+    /// Allowed client-cert CNs for this server.
+    #[serde(default)]
+    pub allow_cn: Vec<String>,
+    /// Optional per-server IP allowlist; if absent, [network].allow_ips is used.
+    pub allow_ips: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ObCfg {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub ca: String,
+}
+
+impl FileConfig {
+    pub fn data_allow_ips(&self) -> Vec<String> {
+        self.data
+            .allow_ips
+            .clone()
+            .unwrap_or_else(|| self.network.allow_ips.clone())
+    }
+    pub fn mgmt_allow_ips(&self) -> Vec<String> {
+        self.mgmt
+            .allow_ips
+            .clone()
+            .unwrap_or_else(|| self.network.allow_ips.clone())
     }
 }
 
-fn env(k: &str, d: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| d.to_string())
+pub fn load() -> Result<FileConfig> {
+    let path = std::env::var("CONFIG").unwrap_or_else(|_| "./agent.toml".to_string());
+    let text = std::fs::read_to_string(&path).with_context(|| format!("read config {path}"))?;
+    let cfg: FileConfig = toml::from_str(&text).with_context(|| format!("parse TOML {path}"))?;
+    Ok(cfg)
 }
