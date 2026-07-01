@@ -1,8 +1,8 @@
 //! OceanBase monitoring agent prototype. Cold start, cert kept only in memory.
 //! Both servers are HTTPS + mTLS (client cert required) + IP allowlist + CN allowlist.
 //!
-//!   data :8443  GET /version, GET /health
-//!   mgmt :9443  POST /cert (multipart cert+key), GET /cert/validity
+//!   data :8443  GET /version, GET /health   (server cert becomes the uploaded one)
+//!   mgmt :9443  POST /cert, GET /cert/validity  (keeps the embedded self-signed cert)
 //!
 //! Config: ./agent.toml (or env CONFIG).
 
@@ -24,7 +24,8 @@ use anyhow::{Context, Result};
 
 use state::Shared;
 
-// Embedded self-signed cert for both servers (channel identity, not a secret).
+// Embedded self-signed cert used at start for both servers (channel identity, not a secret).
+// The data server swaps to the uploaded cert after a successful /cert; mgmt keeps this one.
 const MGMT_CERT: &str = include_str!("../embedded/mgmt-cert.pem");
 const MGMT_KEY: &str = include_str!("../embedded/mgmt-key.pem");
 
@@ -36,21 +37,22 @@ async fn main() -> Result<()> {
         cfg.oceanbase.host, cfg.oceanbase.port, cfg.oceanbase.user
     );
 
-    let shared = Shared::new(&cfg)?;
+    let ca_pem = std::fs::read(&cfg.oceanbase.ca)
+        .with_context(|| format!("read CA {}", cfg.oceanbase.ca))?;
     println!(
         "[OK] CA loaded ({} bytes). No client cert yet -- phase NoCert.",
-        shared.ca_pem.len()
+        ca_pem.len()
     );
 
     // per-server IP allowlist (per-server or common default)
     let data_nets = Arc::new(acl::parse_nets(&cfg.data_allow_ips()));
     let mgmt_nets = Arc::new(acl::parse_nets(&cfg.mgmt_allow_ips()));
 
-    // per-server TLS: shared embedded cert + that server's CN allowlist
+    // per-server TLS: start on embedded cert; data will hot-reload to the uploaded cert
     let data_tls = tls::build_rustls(
         MGMT_CERT.as_bytes(),
         MGMT_KEY.as_bytes(),
-        &shared.ca_pem,
+        &ca_pem,
         cfg.data.allow_cn.clone(),
         "data",
     )
@@ -58,11 +60,14 @@ async fn main() -> Result<()> {
     let mgmt_tls = tls::build_rustls(
         MGMT_CERT.as_bytes(),
         MGMT_KEY.as_bytes(),
-        &shared.ca_pem,
+        &ca_pem,
         cfg.mgmt.allow_cn.clone(),
         "mgmt",
     )
     .context("mgmt TLS")?;
+
+    // Shared holds a clone of data_tls (same ArcSwap) so /cert can hot-reload it.
+    let shared = Shared::new(&cfg, ca_pem, data_tls.clone());
 
     let data_app = api::data_router(shared.clone(), data_nets);
     let mgmt_app = mgmt::mgmt_router(shared.clone(), mgmt_nets);
@@ -83,7 +88,7 @@ async fn main() -> Result<()> {
             .await
     });
 
-    println!("[*] both servers up (mTLS), waiting for cert upload...");
+    println!("[*] both servers up (mTLS). data serves self-signed until /cert, then the uploaded cert.");
     tokio::select! {
         r = data_task => { r??; }
         r = mgmt_task => { r??; }

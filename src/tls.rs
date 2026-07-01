@@ -1,5 +1,5 @@
 //! Builds the rustls ServerConfig for each server:
-//!  - server identity: the embedded self-signed cert (from memory);
+//!  - server identity: cert+key from memory (embedded at start, uploaded later);
 //!  - client verification: WebPkiClientVerifier against our CA + CN allowlist
 //!    (mTLS is mandatory).
 
@@ -14,13 +14,15 @@ use rustls::{RootCertStore, ServerConfig};
 
 use crate::acl::CnAllowlistVerifier;
 
-pub fn build_rustls(
+/// Build a rustls ServerConfig: given server cert/key present it to clients, and
+/// require a client cert chaining to `ca_pem` whose CN is in `allow_cn`.
+pub fn build_server_config(
     server_cert_pem: &[u8],
     server_key_pem: &[u8],
     ca_pem: &[u8],
     allow_cn: Vec<String>,
     label: &'static str,
-) -> Result<RustlsConfig> {
+) -> Result<Arc<ServerConfig>> {
     // trusted roots for client cert verification
     let cas: Vec<CertificateDer> = CertificateDer::pem_slice_iter(ca_pem)
         .collect::<Result<_, _>>()
@@ -36,7 +38,6 @@ pub fn build_rustls(
         .map_err(|e| anyhow!("build client verifier: {e}"))?;
     let verifier = Arc::new(CnAllowlistVerifier::new(webpki, allow_cn, label));
 
-    // server identity from memory
     let cert_chain: Vec<CertificateDer> = CertificateDer::pem_slice_iter(server_cert_pem)
         .collect::<Result<_, _>>()
         .map_err(|e| anyhow!("server cert PEM: {e}"))?;
@@ -48,5 +49,18 @@ pub fn build_rustls(
         .with_single_cert(cert_chain, key)
         .map_err(|e| anyhow!("server config: {e}"))?;
 
-    Ok(RustlsConfig::from_config(Arc::new(config)))
+    Ok(Arc::new(config))
+}
+
+/// Same as `build_server_config`, wrapped in an axum-server `RustlsConfig`
+/// (holds an ArcSwap, so it can be hot-reloaded later via `reload_from_config`).
+pub fn build_rustls(
+    server_cert_pem: &[u8],
+    server_key_pem: &[u8],
+    ca_pem: &[u8],
+    allow_cn: Vec<String>,
+    label: &'static str,
+) -> Result<RustlsConfig> {
+    let cfg = build_server_config(server_cert_pem, server_key_pem, ca_pem, allow_cn, label)?;
+    Ok(RustlsConfig::from_config(cfg))
 }
