@@ -16,6 +16,7 @@ mod error;
 mod mgmt;
 mod state;
 mod tls;
+mod util;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use state::Shared;
+use util::now_ts;
 
 // Embedded self-signed cert used at start for both servers (channel identity, not a secret).
 // The data server swaps to the uploaded cert after a successful /cert; mgmt keeps this one.
@@ -33,22 +35,24 @@ const MGMT_KEY: &str = include_str!("../embedded/mgmt-key.pem");
 async fn main() -> Result<()> {
     let cfg = config::load()?;
     println!(
-        "[*] OB target {}:{} user '{}'",
-        cfg.oceanbase.host, cfg.oceanbase.port, cfg.oceanbase.user
+        "{} [*] OB target {}:{} user '{}'",
+        now_ts(),
+        cfg.oceanbase.host,
+        cfg.oceanbase.port,
+        cfg.oceanbase.user
     );
 
     let ca_pem = std::fs::read(&cfg.oceanbase.ca)
         .with_context(|| format!("read CA {}", cfg.oceanbase.ca))?;
     println!(
-        "[OK] CA loaded ({} bytes). No client cert yet -- phase NoCert.",
+        "{} [OK] CA loaded ({} bytes). No client cert yet -- phase NoCert.",
+        now_ts(),
         ca_pem.len()
     );
 
-    // per-server IP allowlist (per-server or common default)
     let data_nets = Arc::new(acl::parse_nets(&cfg.data_allow_ips()));
     let mgmt_nets = Arc::new(acl::parse_nets(&cfg.mgmt_allow_ips()));
 
-    // per-server TLS: start on embedded cert; data will hot-reload to the uploaded cert
     let data_tls = tls::build_rustls(
         MGMT_CERT.as_bytes(),
         MGMT_KEY.as_bytes(),
@@ -66,7 +70,6 @@ async fn main() -> Result<()> {
     )
     .context("mgmt TLS")?;
 
-    // Shared holds a clone of data_tls (same ArcSwap) so /cert can hot-reload it.
     let shared = Shared::new(&cfg, ca_pem, data_tls.clone());
 
     let data_app = api::data_router(shared.clone(), data_nets);
@@ -74,8 +77,8 @@ async fn main() -> Result<()> {
 
     let data_addr: SocketAddr = cfg.data.listen.parse().context("data.listen")?;
     let mgmt_addr: SocketAddr = cfg.mgmt.listen.parse().context("mgmt.listen")?;
-    println!("[*] data  HTTPS+mTLS https://{}  allow_cn={:?}", data_addr, cfg.data.allow_cn);
-    println!("[*] mgmt  HTTPS+mTLS https://{}  allow_cn={:?}", mgmt_addr, cfg.mgmt.allow_cn);
+    println!("{} [*] data  HTTPS+mTLS https://{}  allow_cn={:?}", now_ts(), data_addr, cfg.data.allow_cn);
+    println!("{} [*] mgmt  HTTPS+mTLS https://{}  allow_cn={:?}", now_ts(), mgmt_addr, cfg.mgmt.allow_cn);
 
     let data_task = tokio::spawn(async move {
         axum_server::bind_rustls(data_addr, data_tls)
@@ -88,7 +91,7 @@ async fn main() -> Result<()> {
             .await
     });
 
-    println!("[*] both servers up (mTLS). data serves self-signed until /cert, then the uploaded cert.");
+    println!("{} [*] both servers up (mTLS). data serves self-signed until /cert, then the uploaded cert.", now_ts());
     tokio::select! {
         r = data_task => { r??; }
         r = mgmt_task => { r??; }

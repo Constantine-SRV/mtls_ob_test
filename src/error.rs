@@ -3,6 +3,8 @@
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 
+use crate::util::now_ts;
+
 pub enum ApiError {
     NoCert,
     Internal(anyhow::Error),
@@ -14,7 +16,7 @@ impl IntoResponse for ApiError {
             ApiError::NoCert => (StatusCode::SERVICE_UNAVAILABLE, "nocert".to_string()),
             ApiError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
-        let body = serde_json::json!({ "error": msg }).to_string();
+        let body = serde_json::json!({ "error": msg, "ts": now_ts() }).to_string() + "\n";
         (code, [(header::CONTENT_TYPE, "application/json")], body).into_response()
     }
 }

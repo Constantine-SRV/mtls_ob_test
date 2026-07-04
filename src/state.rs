@@ -1,7 +1,6 @@
 //! Shared state for both servers + hot cert reload.
-//! On upload the data server's TLS cert is swapped to the uploaded (valid) cert,
-//! so clients can talk to the data port without `-k`. The mgmt server keeps its
-//! embedded self-signed cert (stable bootstrap identity).
+//! On upload the data server's TLS cert is swapped to the uploaded (valid) cert.
+//! The mgmt server keeps its embedded self-signed cert (stable bootstrap identity).
 
 use std::sync::Arc;
 
@@ -14,6 +13,7 @@ use crate::config::FileConfig;
 use crate::credentials::Identity;
 use crate::db::Db;
 use crate::tls;
+use crate::util::now_ts;
 
 #[derive(Clone)]
 pub struct ClientCred {
@@ -27,9 +27,7 @@ pub struct Shared {
     pub ob_port: u16,
     pub ob_user: String,
     pub ca_pem: Vec<u8>,
-    /// Handle to the data server's TLS config (same ArcSwap as the running server).
     pub data_tls: RustlsConfig,
-    /// CN allowlist for the data server (needed to rebuild its ServerConfig on reload).
     pub data_allow_cn: Vec<String>,
     pub client: RwLock<Option<ClientCred>>,
     pub db: RwLock<Option<Db>>,
@@ -50,12 +48,13 @@ impl Shared {
     }
 
     /// Hot install/replace of the cert. State changes only if the cert actually
-    /// authenticates against OB (self-check). On success, also swaps the data
-    /// server's TLS cert to this (valid) cert so the data port drops self-signed.
+    /// authenticates against OB (self-check). On success, swaps the data server's
+    /// TLS cert to this (valid) cert so the data port drops self-signed.
     pub async fn install_cert(&self, cert_pem: Vec<u8>, key_pem: Vec<u8>) -> Result<CertInfo> {
         let info = certinfo::describe(&cert_pem)?;
         println!(
-            "[cert] upload: CN={} valid {}..{} | cert {} bytes, key {} bytes",
+            "{} [cert] upload: CN={} valid {}..{} | cert {} bytes, key {} bytes",
+            now_ts(),
             info.cn,
             info.not_before,
             info.not_after,
@@ -63,8 +62,11 @@ impl Shared {
             key_pem.len()
         );
         println!(
-            "[cert] self-check -> OceanBase {}:{} user '{}'",
-            self.ob_host, self.ob_port, self.ob_user
+            "{} [cert] self-check -> OceanBase {}:{} user '{}'",
+            now_ts(),
+            self.ob_host,
+            self.ob_port,
+            self.ob_user
         );
 
         let id = Identity {
@@ -74,15 +76,14 @@ impl Shared {
         };
         let db = Db::connect(&id, &self.ob_host, self.ob_port, &self.ob_user);
 
-        match db.version_json().await {
-            Ok(v) => println!("[cert] self-check OK: {v}"),
+        match db.version().await {
+            Ok(v) => println!("{} [cert] self-check OK: version={v}", now_ts()),
             Err(e) => {
-                eprintln!("[cert] self-check FAIL: {e:?}");
+                eprintln!("{} [cert] self-check FAIL: {e:?}", now_ts());
                 return Err(e).context("new cert failed to authenticate against OceanBase");
             }
         }
 
-        // Swap the data server's TLS cert to the uploaded one (same client verifier).
         match tls::build_server_config(
             &cert_pem,
             &key_pem,
@@ -92,17 +93,16 @@ impl Shared {
         ) {
             Ok(server_cfg) => {
                 self.data_tls.reload_from_config(server_cfg);
-                println!("[cert] data TLS reloaded: data port now presents the uploaded cert");
+                println!("{} [cert] data TLS reloaded: data port now presents the uploaded cert", now_ts());
             }
             Err(e) => {
-                // Client->OB path already works; keep serving (self-signed) on data.
-                eprintln!("[cert] WARN: data TLS reload failed, data port stays self-signed: {e:?}");
+                eprintln!("{} [cert] WARN: data TLS reload failed, data port stays self-signed: {e:?}", now_ts());
             }
         }
 
         *self.client.write().await = Some(ClientCred { cert_pem, key_pem });
         *self.db.write().await = Some(db);
-        println!("[cert] installed, agent is now Ready");
+        println!("{} [cert] installed, agent is now Ready", now_ts());
         Ok(info)
     }
 }

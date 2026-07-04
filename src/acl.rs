@@ -1,9 +1,8 @@
 //! Access control:
 //!  - CN allowlist: enforced INSIDE the client-cert verifier during the TLS
-//!    handshake (a disallowed CN never reaches a handler — the TLS connection
-//!    is rejected);
-//!  - IP allowlist: axum middleware based on the source address
-//!    (ConnectInfo<SocketAddr>), which also logs every request.
+//!    handshake (a disallowed CN never reaches a handler);
+//!  - IP allowlist: axum middleware based on the source address, which also
+//!    logs every request.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -19,11 +18,12 @@ use rustls::pki_types::{CertificateDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{DigitallySignedStruct, DistinguishedName, Error as RustlsError, SignatureScheme};
 
+use crate::util::now_ts;
+
 // ---------------- CN allowlist (TLS layer) ----------------
 
-/// Wraps WebPkiClientVerifier: first the standard chain check against our CA
-/// (delegated to `inner`), then the end-entity CN is matched against the
-/// per-server allowlist. Logs every handshake decision.
+/// Wraps WebPkiClientVerifier: standard chain check against our CA (delegated to
+/// `inner`), then the end-entity CN is matched against the per-server allowlist.
 #[derive(Debug)]
 pub struct CnAllowlistVerifier {
     inner: Arc<dyn ClientCertVerifier>,
@@ -48,22 +48,20 @@ impl ClientCertVerifier for CnAllowlistVerifier {
         intermediates: &[CertificateDer<'_>],
         now: UnixTime,
     ) -> Result<ClientCertVerified, RustlsError> {
-        // 1) chain is valid and trusted by our CA
         let verified = match self.inner.verify_client_cert(end_entity, intermediates, now) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("[{}] TLS: client cert chain invalid: {e}", self.label);
+                eprintln!("{} [{}] TLS: client cert chain invalid: {e}", now_ts(), self.label);
                 return Err(e);
             }
         };
-        // 2) CN must be in this server's allowlist
         let cn = cn_from_der(end_entity.as_ref())
             .ok_or_else(|| RustlsError::General("client cert has no CN".to_string()))?;
         if self.allow_cn.iter().any(|a| a == &cn) {
-            println!("[{}] TLS: client CN='{}' accepted", self.label, cn);
+            println!("{} [{}] TLS: client CN='{}' accepted", now_ts(), self.label, cn);
             Ok(verified)
         } else {
-            println!("[{}] TLS: client CN='{}' REJECTED (not in allow_cn)", self.label, cn);
+            println!("{} [{}] TLS: client CN='{}' REJECTED (not in allow_cn)", now_ts(), self.label, cn);
             Err(RustlsError::General(format!("CN '{cn}' not in allowlist")))
         }
     }
@@ -104,8 +102,6 @@ fn cn_from_der(der: &[u8]) -> Option<String> {
 
 // ---------------- IP allowlist + request log (HTTP middleware) ----------------
 
-/// State passed to the guard middleware: the allowed networks and a server label
-/// used in log lines ("data" / "mgmt").
 #[derive(Clone)]
 pub struct GuardState {
     pub nets: Arc<Vec<IpNet>>,
@@ -134,8 +130,8 @@ fn ip_allowed(nets: &[IpNet], ip: IpAddr) -> bool {
 }
 
 /// Middleware: rejects requests from IPs outside the allowlist (403) and logs
-/// every request as `[label] METHOD /path from IP -> status`.
-/// An empty allowlist means "allow all".
+/// every request as `TS [label] METHOD /path from IP -> status`.
+/// Empty allowlist means "allow all".
 pub async fn ip_guard(
     State(gs): State<GuardState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -147,18 +143,20 @@ pub async fn ip_guard(
     let path = req.uri().path().to_string();
 
     if !gs.nets.is_empty() && !ip_allowed(&gs.nets, ip) {
-        println!("[{}] {} {} from {} -> 403 ip_not_allowed", gs.label, method, path, ip);
+        println!("{} [{}] {} {} from {} -> 403 ip_not_allowed", now_ts(), gs.label, method, path, ip);
+        let body = serde_json::json!({ "error": "ip_not_allowed", "ts": now_ts() }).to_string() + "\n";
         return (
             StatusCode::FORBIDDEN,
             [(header::CONTENT_TYPE, "application/json")],
-            "{\"error\":\"ip_not_allowed\"}",
+            body,
         )
             .into_response();
     }
 
     let resp = next.run(req).await;
     println!(
-        "[{}] {} {} from {} -> {}",
+        "{} [{}] {} {} from {} -> {}",
+        now_ts(),
         gs.label,
         method,
         path,

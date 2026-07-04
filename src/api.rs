@@ -13,6 +13,7 @@ use ipnet::IpNet;
 use crate::acl::{ip_guard, GuardState};
 use crate::error::ApiError;
 use crate::state::Shared;
+use crate::util::now_ts;
 
 pub fn data_router(shared: Arc<Shared>, nets: Arc<Vec<IpNet>>) -> Router {
     let guard = GuardState { nets, label: "data" };
@@ -24,7 +25,7 @@ pub fn data_router(shared: Arc<Shared>, nets: Arc<Vec<IpNet>>) -> Router {
 }
 
 async fn health() -> &'static str {
-    "ok"
+    "ok\n"
 }
 
 async fn version(State(sh): State<Arc<Shared>>) -> Result<Response, ApiError> {
@@ -32,6 +33,7 @@ async fn version(State(sh): State<Arc<Shared>>) -> Result<Response, ApiError> {
     let Some(db) = db else {
         return Err(ApiError::NoCert);
     };
-    let body = db.version_json().await?;
+    let v = db.version().await?;
+    let body = serde_json::json!({ "version": v, "ts": now_ts() }).to_string() + "\n";
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }

@@ -14,6 +14,7 @@ use crate::acl::{ip_guard, GuardState};
 use crate::certinfo;
 use crate::error::ApiError;
 use crate::state::Shared;
+use crate::util::now_ts;
 
 pub fn mgmt_router(shared: Arc<Shared>, nets: Arc<Vec<IpNet>>) -> Router {
     let guard = GuardState { nets, label: "mgmt" };
@@ -50,9 +51,11 @@ async fn upload_cert(
         "cn": info.cn,
         "not_before": info.not_before,
         "not_after": info.not_after,
-        "note": "cert accepted and verified by connecting to OceanBase"
+        "note": "cert accepted and verified by connecting to OceanBase",
+        "ts": now_ts()
     })
-    .to_string();
+    .to_string()
+        + "\n";
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }
 
@@ -65,8 +68,10 @@ async fn validity(State(sh): State<Arc<Shared>>) -> Result<Response, ApiError> {
     let body = serde_json::json!({
         "cn": info.cn,
         "not_before": info.not_before,
-        "not_after": info.not_after
+        "not_after": info.not_after,
+        "ts": now_ts()
     })
-    .to_string();
+    .to_string()
+        + "\n";
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }

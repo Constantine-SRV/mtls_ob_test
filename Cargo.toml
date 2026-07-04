@@ -9,16 +9,14 @@ mysql_async = { version = "0.37", default-features = false, features = ["default
 pem = "3"
 x509-parser = "0.18"
 axum = { version = "0.8", features = ["multipart"] }
-# HTTPS-приём из памяти; no-provider => используем ring от mysql_async (без aws-lc/cmake)
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
-# rustls напрямую — для кастомного ServerConfig с проверкой client-cert.
-# default-features=false: провайдер (ring) приходит от mysql_async, без aws-lc.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging"] }
 ipnet = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 anyhow = "1"
 serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [profile.release]
 strip = "symbols"

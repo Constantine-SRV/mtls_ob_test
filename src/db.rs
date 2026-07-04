@@ -1,4 +1,4 @@
-//! Доступ к OceanBase: пул поверх mTLS, идентичность из памяти.
+//! OceanBase access: mTLS connection pool + queries.
 
 use anyhow::Result;
 use mysql_async::prelude::Queryable;
@@ -27,11 +27,10 @@ impl Db {
         Db { pool: Pool::new(opts) }
     }
 
-    pub async fn version_json(&self) -> Result<String> {
+    /// Returns the OceanBase version string.
+    pub async fn version(&self) -> Result<String> {
         let mut conn = self.pool.get_conn().await?;
-        let row: Option<String> = conn
-            .query_first("SELECT JSON_OBJECT('version', version())")
-            .await?;
-        Ok(row.unwrap_or_else(|| "{}".to_string()))
+        let v: Option<String> = conn.query_first("SELECT version()").await?;
+        Ok(v.unwrap_or_default())
     }
 }
