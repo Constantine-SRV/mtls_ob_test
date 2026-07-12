@@ -10,12 +10,14 @@ pem = "3"
 x509-parser = "0.18"
 axum = { version = "0.8", features = ["multipart"] }
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
+# HTTP client to fetch certs from Vault; native system roots + ring (no aws-lc, no OpenSSL)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "json"] }
 ipnet = "2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 anyhow = "1"
-serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [profile.release]

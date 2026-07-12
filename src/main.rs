@@ -17,6 +17,7 @@ mod mgmt;
 mod state;
 mod tls;
 mod util;
+mod vault;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -33,6 +34,9 @@ const MGMT_KEY: &str = include_str!("../embedded/mgmt-key.pem");
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install the ring crypto provider as process default (needed by reqwest no-provider).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cfg = config::load()?;
     println!(
         "{} [*] OB target {}:{} user '{}'",
